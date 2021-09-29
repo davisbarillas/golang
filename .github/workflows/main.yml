@@ -20,14 +20,42 @@ jobs:
     - uses: actions/setup-go@v2
       with:
         go-version: '^1.14'
+    - name: Extract branch name
+      shell: bash
+      run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+      id: extract_branch
+    - name: Branch name
+      run: echo running on branch ${GITHUB_REF##*/}
     - name: Build
       run: |
         go build ./...
     - name: Download ShiftLeft CLI
       run: |
         curl https://cdn.shiftleft.io/download/sl > ${GITHUB_WORKSPACE}/sl && chmod a+rx ${GITHUB_WORKSPACE}/sl
-    - name: NextGen Static Analysis
-      run: ${GITHUB_WORKSPACE}/sl analyze --wait --app golang --tag branch=${{ github.head_ref }} --go --cpg $(pwd)
+    - name: NG SAST Trunk
+      # Removed the --wait since we wont be checking the scan
+      if: ${{ github.ref == 'refs/heads/main' }}
+      run: ${GITHUB_WORKSPACE}/sl analyze --app golang --tag branch=${{ github.head_ref || steps.extract_branch.outputs.branch }} --go --cpg $(pwd)
       env:
         SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
         SHIFTLEFT_ORG_ID: ${{ secrets.SHIFTLEFT_ORG_ID }}
+    - name: NG SAST PR
+      # --wait in place because we will run check-analysis with this scan
+      if: ${{ github.event_name == 'pull_request' }}
+      run: ${GITHUB_WORKSPACE}/sl analyze --wait --app golang --tag branch=${{ github.head_ref || steps.extract_branch.outputs.branch }} --go --cpg $(pwd)
+      env:
+        SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
+        SHIFTLEFT_ORG_ID: ${{ secrets.SHIFTLEFT_ORG_ID }}
+    - name: Validate Build Rules
+      # Only run on pull request and compare to Main as set in the build rules file Shiftleft.yml
+      if: ${{ github.event_name == 'pull_request' }}
+      run: | 
+            ${GITHUB_WORKSPACE}/sl check-analysis --app golang \
+            --branch "${{ github.head_ref || steps.extract_branch.outputs.branch }}" \
+            --report \
+            --github-pr-number=${{github.event.number}} \
+            --github-pr-user=${{ github.repository_owner }} \
+            --github-pr-repo=${{ github.event.repository.name }} \
+            --github-token=${{ secrets.GITHUB_TOKEN }}
+      env:
+        SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
